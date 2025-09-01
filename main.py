@@ -35,6 +35,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- System Prompt Padrão ----------------
+SYSTEM_PROMPT = """Você é a IA do aplicativo PAC Lead. Siga as instruções abaixo e responda sempre em português, de forma clara e objetiva.
+
+1) Tela de Análise:
+- Explique que o usuário verá o número total de conversas iniciadas, classificação dos leads (normais, qualificados, quentes), objetivos alcançados, taxa de conversão e outros indicadores como horário de conversão e produto mais falado.
+
+2) Tela da Empresa:
+- Oriente a inserir o CNPJ ou CPF para preencher automaticamente razão social, nome fantasia, contato e endereço. Informe que é possível fazer upload de uma foto da empresa.
+
+3) Tela de Configuração do Agente de IA:
+- Explique que pode definir nome do agente, setor de atuação, estilo de comunicação (formal, descontraído, etc.), perfil do agente (consultivo, vendedor, acolhedor, etc.) e fazer upload de uma foto. Também é possível adicionar observações ou scripts.
+
+4) Tela de Produtos:
+- Instrua a adicionar nome, preço, categoria, descrição e imagem de cada produto. A IA pode ajudar a criar a descrição (copy) a partir das informações inseridas. Explique que existe busca para localizar produtos e que é possível editar qualquer item clicando nele.
+
+5) Tela de Usuários:
+- Oriente a adicionar novas contas de acesso sem compartilhar a própria senha. Basta preencher nome de usuário, e-mail, senha e uma observação para identificar o dispositivo ou usuário.
+
+Regra de limite:
+- Se o usuário pedir para criar uma DESCRIÇÃO de qualquer coisa, responda com no máximo 250 caracteres.
+"""
+
+# ---------------- Schemas ----------------
 class ChatMessage(BaseModel):
     role: str = Field(..., description="user|assistant|system")
     content: str
@@ -48,6 +71,7 @@ class VisionUrlRequest(BaseModel):
     prompt: Optional[str] = Field(default="Descreva a imagem de forma objetiva.")
     image_url: str
 
+# ---------------- Helpers ----------------
 def _mk_messages(system: Optional[str], history: List[ChatMessage], user_text: Optional[str]) -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
     if system:
@@ -58,11 +82,17 @@ def _mk_messages(system: Optional[str], history: List[ChatMessage], user_text: O
         messages.append({"role": "user", "content": user_text})
     return messages
 
+# ---------------- Routes ----------------
 @app.post("/api/chat")
 def chat(req: ChatRequest):
+    """
+    Chat de texto. Usa o SYSTEM_PROMPT por padrão, podendo ser
+    substituído ao enviar "system" no body.
+    """
     try:
-        messages = _mk_messages(req.system, req.history or [], req.message)
-        # OpenAI Chat Completions
+        system_prompt = req.system or SYSTEM_PROMPT
+        messages = _mk_messages(system_prompt, req.history or [], req.message)
+
         resp = client.chat.completions.create(
             model=TEXT_MODEL,
             messages=messages,
@@ -77,6 +107,7 @@ def chat(req: ChatRequest):
 def vision_url(req: VisionUrlRequest):
     """
     Analisa imagem via URL + prompt opcional.
+    Aplica o SYSTEM_PROMPT para manter o estilo/comportamento.
     """
     try:
         user_content = [
@@ -85,7 +116,10 @@ def vision_url(req: VisionUrlRequest):
         ]
         resp = client.chat.completions.create(
             model=VISION_MODEL,
-            messages=[{"role": "user", "content": user_content}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
             temperature=0.2,
         )
         text = resp.choices[0].message.content
@@ -100,19 +134,24 @@ async def vision_upload(
 ):
     """
     Analisa imagem enviada por upload (gera data URL base64).
+    Aplica o SYSTEM_PROMPT para manter o estilo/comportamento.
     """
     try:
         data = await image.read()
         mime = image.content_type or "image/png"
         b64 = base64.b64encode(data).decode("utf-8")
         data_url = f"data:{mime};base64,{b64}"
+
         user_content = [
             {"type": "text", "text": prompt or "Descreva a imagem."},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
         resp = client.chat.completions.create(
             model=VISION_MODEL,
-            messages=[{"role": "user", "content": user_content}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
             temperature=0.2,
         )
         text = resp.choices[0].message.content
